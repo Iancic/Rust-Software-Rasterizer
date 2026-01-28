@@ -18,6 +18,7 @@ struct Vertex
     position: Vec3,
     normal: Vec3,
     color: Vec3,
+    uv: Vec2,
 }
 
 struct Edge
@@ -63,44 +64,49 @@ struct Framebuffer
     height: usize,
 }
 
-impl Framebuffer
-{
-   fn clear_screen(&mut self, color: u32)
-   {
-        for i in 0..SCREEN_WIDTH * SCREEN_HEIGHT
-        {
-            self.buffer[i as usize] = color;
-        }
-   }
-
-   fn plot_pixel(&mut self, x_coordinate: usize, y_coordinate: usize, _color: u32)
-   {
-        if x_coordinate < self.width.try_into().unwrap() && y_coordinate <self.height.try_into().unwrap()
-        {
-            self.buffer[self.width * y_coordinate + x_coordinate] = _color;
-        }
-   }
-}
-
 fn main()
 {
-     // 3 vertices to test against
     let v0 = Vertex{
-        position: Vec3{x: 200.0, y: 200.0, z: 0.0},
+        position: Vec3{x: 200.0, y: 200.0, z: 0.0},  // top-left
         normal: Vec3{x: 0.0, y: 0.0, z: 0.0},
         color: Vec3{x: 255.0, y: 0.0, z: 0.0},
+        uv: Vec2{x: 0.0, y: 0.0},
     };
 
-    let v1: Vertex = Vertex{
-        position: Vec3{x: 600.0, y: 200.0, z: 0.0},
+    let v1 = Vertex{
+        position: Vec3{x: 600.0, y: 200.0, z: 0.0},  // top-right
         normal: Vec3{x: 0.0, y: 0.0, z: 0.0},
         color: Vec3{x: 0.0, y: 255.0, z: 0.0},
+        uv: Vec2{x: 1.0, y: 0.0},
     };
 
-    let v2: Vertex = Vertex{
-        position: Vec3{x: 400.0, y: 600.0, z: 0.0},
+    let v2 = Vertex{
+        position: Vec3{x: 200.0, y: 600.0, z: 0.0},  // bottom-left
         normal: Vec3{x: 0.0, y: 0.0, z: 0.0},
         color: Vec3{x: 0.0, y: 0.0, z: 255.0},
+        uv: Vec2{x: 0.0, y: 1.0},
+    };
+
+    // Triangle 2 (top-right, bottom-right, bottom-left)
+    let v3 = Vertex{
+        position: Vec3{x: 600.0, y: 200.0, z: 0.0},  // top-right
+        normal: Vec3{x: 0.0, y: 0.0, z: 0.0},
+        color: Vec3{x: 0.0, y: 255.0, z: 0.0},
+        uv: Vec2{x: 1.0, y: 0.0},
+    };
+
+    let v4 = Vertex{
+        position: Vec3{x: 600.0, y: 600.0, z: 0.0},  // bottom-right
+        normal: Vec3{x: 0.0, y: 0.0, z: 0.0},
+        color: Vec3{x: 255.0, y: 255.0, z: 0.0},
+        uv: Vec2{x: 1.0, y: 1.0},
+    };
+
+    let v5 = Vertex{
+        position: Vec3{x: 200.0, y: 600.0, z: 0.0},  // bottom-left
+        normal: Vec3{x: 0.0, y: 0.0, z: 0.0},
+        color: Vec3{x: 0.0, y: 0.0, z: 255.0},
+        uv: Vec2{x: 0.0, y: 1.0},
     };
 
     let mut framebuffer = Framebuffer{
@@ -126,8 +132,21 @@ fn main()
             let weight_1 = edge_function(&v0, &v2, &point);
             let weight_2 = edge_function(&v2, &v1, &point);
             let weight_3 = edge_function(&v1, &v0, &point);
+            let weight_4 = edge_function(&v3, &v5, &point);
+            let weight_5 = edge_function(&v5, &v4, &point);
+            let weight_6 = edge_function(&v4, &v3, &point);
 
             if is_inside(weight_1, weight_2, weight_3)
+            {
+                let color_vert_a = v0.color * weight_1 / area;
+                let color_vert_b = v1.color * weight_2 / area;
+                let color_vert_c = v2.color * weight_3 / area;
+
+                let final_color = color_vert_a + color_vert_b + color_vert_c;
+
+                *pixel = to_argb(Vec4::new(255f32, final_color.x, final_color.y, final_color.z));
+            }
+            if is_inside(weight_4, weight_5, weight_6)
             {
                 let color_vert_a = v0.color * weight_1 / area;
                 let color_vert_b = v1.color * weight_2 / area;

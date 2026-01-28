@@ -1,9 +1,47 @@
- // Include from other libraries
-use minifb::{Window, WindowOptions, Key};
-use glam::{Vec2, Vec3};
+use minifb::{Key, Window, WindowOptions};
+use glam::{Vec2, Vec3, Vec4};
 
 const SCREEN_WIDTH: usize = 800;
 const SCREEN_HEIGHT: usize = 800;
+
+fn to_argb(input_color: Vec4) -> u32
+{
+    let mut color: u32 = input_color.x as u32;
+    color = (color << 8) + input_color.y as u32;
+    color = (color << 8) + input_color.z as u32;
+    color = (color << 8) + input_color.w as u32;
+    color
+}
+
+struct Vertex
+{
+    position: Vec3,
+    normal: Vec3,
+    color: Vec3,
+}
+
+struct Edge
+{
+    point1: Vec2,
+    point2: Vec2,
+}
+
+fn edge_function(v0: &Vertex, v1: &Vertex, point: &Vec3) -> f32
+{
+    (point.x - v0.position.x) * (v1.position.y - v0.position.y) - (point.y - v0.position.y) * (v1.position.x - v0.position.x)
+}
+
+fn is_inside(edge1: f32, edge2: f32, edge3: f32) -> bool
+{
+    if edge1 >= 0.0 && edge2 >= 0.0 && edge3 >= 0.0
+    {
+        return true;
+    }
+    else
+    {
+        return false;
+    }
+}
 
 struct WindowInstance
 {
@@ -25,7 +63,7 @@ struct Framebuffer
     height: usize,
 }
 
-impl Framebuffer 
+impl Framebuffer
 {
    fn clear_screen(&mut self, color: u32)
    {
@@ -44,52 +82,26 @@ impl Framebuffer
    }
 }
 
-fn to_argb(a: u8, r: u8, g: u8, b: u8) -> u32
+fn main()
 {
-    let mut color: u32 = a as u32;
-    color = (color << 8) + r as u32;
-    color = (color << 8) + g as u32;
-    color = (color << 8) + b as u32;
-    color
-}
+     // 3 vertices to test against
+    let v0 = Vertex{
+        position: Vec3{x: 200.0, y: 200.0, z: 0.0},
+        normal: Vec3{x: 0.0, y: 0.0, z: 0.0},
+        color: Vec3{x: 255.0, y: 0.0, z: 0.0},
+    };
 
-struct Edge
-{
-    point1: Vec2,
-    point2: Vec2,
-}
+    let v1: Vertex = Vertex{
+        position: Vec3{x: 600.0, y: 200.0, z: 0.0},
+        normal: Vec3{x: 0.0, y: 0.0, z: 0.0},
+        color: Vec3{x: 0.0, y: 255.0, z: 0.0},
+    };
 
-fn edge_function(edge: &Edge, point: Vec3) -> f32
-{
-    (point.x - edge.point1.x) * (edge.point2.y - edge.point1.y) - (point.y - edge.point1.y) * (edge.point2.x - edge.point1.x)
-}
-
-fn is_inside(edge1: f32, edge2: f32, edge3: f32) -> bool
-{
-    if edge1 >= 0.0 && edge2 >= 0.0 && edge3 >= 0.0
-    {
-        return true;
-    }
-    else 
-    {
-        return false;
-    }
-}
-
-fn main() 
-{
-     // 3 edges to test against
-    let mut edge1 = Edge{point1: Vec2::new(0.0, 0.0), point2: Vec2::new(0.0, 0.0)};    
-    edge1.point1 = Vec2::new(100.0, 200.0);
-    edge1.point2 = Vec2::new(300.0, 500.0);
-
-    let mut edge2= Edge{point1: Vec2::new(0.0, 0.0), point2: Vec2::new(0.0, 0.0)};    
-    edge2.point1 = Vec2::new(300.0, 500.0);
-    edge2.point2 = Vec2::new(500.0, 200.0);
-
-    let mut edge3= Edge{point1: Vec2::new(0.0, 0.0), point2: Vec2::new(0.0, 0.0)};    
-    edge3.point1 = Vec2::new(500.0, 200.0);
-    edge3.point2 = Vec2::new(100.0, 200.0);
+    let v2: Vertex = Vertex{
+        position: Vec3{x: 400.0, y: 600.0, z: 0.0},
+        normal: Vec3{x: 0.0, y: 0.0, z: 0.0},
+        color: Vec3{x: 0.0, y: 0.0, z: 255.0},
+    };
 
     let mut framebuffer = Framebuffer{
         buffer: vec![0; SCREEN_WIDTH * SCREEN_HEIGHT],
@@ -106,25 +118,27 @@ fn main()
 
     while current_window.window.is_open() && !current_window.window.is_key_down(Key::Escape)
     {
-        //framebuffer.clear_screen(to_argb(255, 255, 255, 255));
-        
         for (i, pixel) in framebuffer.buffer.iter_mut().enumerate()
         {
             let point = Vec3::new(i as f32 % SCREEN_WIDTH as f32, i as f32 / SCREEN_WIDTH as f32, 0.0);
-            let bool1 = edge_function(&edge1, point);
-            let bool2 = edge_function(&edge2, point);
-            let bool3 = edge_function(&edge3, point);
-            
-            if is_inside(bool1, bool2, bool3)
+
+            let area = edge_function(&v0, &v2, &v1.position);
+            let weight_1 = edge_function(&v0, &v2, &point);
+            let weight_2 = edge_function(&v2, &v1, &point);
+            let weight_3 = edge_function(&v1, &v0, &point);
+
+            if is_inside(weight_1, weight_2, weight_3)
             {
-                *pixel = to_argb(
-                            255,
-                            255,
-                            0,
-                            0);            
+                let color_vert_a = v0.color * weight_1 / area;
+                let color_vert_b = v1.color * weight_2 / area;
+                let color_vert_c = v2.color * weight_3 / area;
+
+                let final_color = color_vert_a + color_vert_b + color_vert_c;
+
+                *pixel = to_argb(Vec4::new(255f32, final_color.x, final_color.y, final_color.z));
             }
         }
-        
+
         current_window.window
             .update_with_buffer(&framebuffer.buffer, SCREEN_WIDTH, SCREEN_HEIGHT)
             .unwrap();

@@ -1,6 +1,6 @@
 use glam::{Vec2, Vec3};
-use crate::Path;
-use crate::MeshRenderer;
+use std::path::Path;
+use crate::geometry::MeshRenderer;
 
 pub fn edge_function(v0: Vec2, v1: Vec2, point: Vec2) -> f32
 {
@@ -78,7 +78,7 @@ pub fn load_gltf(path: &Path) -> MeshRenderer {
 
 // Credit: Claude Sonnet 4.5
 // Helper function to convert your u32 ARGB format to Bevy's RGBA8 byte format
-fn convert_framebuffer_to_image(framebuffer: &[u32], image_data: &mut [u8]) {
+pub fn convert_framebuffer_to_image(framebuffer: &[u32], image_data: &mut [u8]) {
     for (i, &pixel) in framebuffer.iter().enumerate() {
         // Your pixel is packed as: (alpha << 24) | (red << 16) | (green << 8) | blue
         // Extract each component

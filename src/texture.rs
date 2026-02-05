@@ -7,7 +7,6 @@ pub struct Texture
     pub width: usize,
     pub height: usize,
     pub data: Vec<u32>,
-    pub depth: usize,
 }
 
 impl Texture{
@@ -23,7 +22,6 @@ impl Texture{
                 width: image.width,
                 height: image.height,
                 data,
-                depth: image.depth,
             }
         } else {
             panic!("Unsupported texture type");
@@ -32,13 +30,22 @@ impl Texture{
 
     pub fn argb_at_uv(&self, u: f32, v: f32) -> u32
     {
-        let (u, v) = (u * (self.width - 1) as f32, v * (self.height - 1) as f32);
-        let id = coords_to_index(u as usize, v as usize, self.width);
+        // Claude Sonnet 4.5 improved
+        // glTF default sampler wrapping is REPEAT. Using rem_euclid keeps negatives sane too.
+        let u = u.rem_euclid(1.0);
+        let v = v.rem_euclid(1.0);
+
+        let u = u * (self.width - 1) as f32;
+        let v = v * (self.height - 1) as f32;
+
+        let x = u as usize;
+        let y = v as usize;
+
+        let id = coords_to_index(x, y, self.width);
 
         if id < self.data.len() {
             self.data[id]
-        }
-        else {
+        } else {
             to_argb(255, 255, 0, 255)
         }
     }

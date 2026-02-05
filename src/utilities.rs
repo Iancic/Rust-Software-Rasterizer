@@ -1,4 +1,6 @@
 use glam::{Vec2, Vec3};
+use crate::Path;
+use crate::MeshRenderer;
 
 pub fn edge_function(v0: Vec2, v1: Vec2, point: Vec2) -> f32
 {
@@ -33,10 +35,6 @@ pub fn to_argb(a: u8, r: u8, g: u8, b: u8) -> u32
     color
 }
 
-pub fn index_to_coords(p: usize, width: usize) -> (usize, usize) {
-    (p % width, p / width)
-}
-
 pub fn coords_to_index(u: usize, v: usize, width: usize) -> usize
 {
     u + v * width
@@ -55,11 +53,45 @@ where
     b1 + (v - a1) * (b2 - b1) / (a2 - a1)
 }
 
-// LEARN ABOUT THIS template magic
+// NOTE: learn more about templates
 pub fn clear_buffer<T>(buffer: &mut Vec<T>, value: T)
 where
     T: Copy,
 {
     // will "consume" the iterator and return the n of iterations
     buffer.iter_mut().map(|x| *x = value).count();
+}
+
+pub fn load_gltf(path: &Path) -> MeshRenderer {
+    let (document, buffers, _images) = gltf::import(path).unwrap();
+
+    for scene in document.scenes() {
+        for node in scene.nodes() {
+            if let Some(mesh) = node.mesh() {
+                return MeshRenderer::load_from_gltf(&mesh, &buffers);
+            }
+        }
+    }
+
+    MeshRenderer::new()
+}
+
+// Credit: Claude Sonnet 4.5
+// Helper function to convert your u32 ARGB format to Bevy's RGBA8 byte format
+fn convert_framebuffer_to_image(framebuffer: &[u32], image_data: &mut [u8]) {
+    for (i, &pixel) in framebuffer.iter().enumerate() {
+        // Your pixel is packed as: (alpha << 24) | (red << 16) | (green << 8) | blue
+        // Extract each component
+        let a = ((pixel >> 24) & 0xFF) as u8;
+        let r = ((pixel >> 16) & 0xFF) as u8;
+        let g = ((pixel >> 8) & 0xFF) as u8;
+        let b = (pixel & 0xFF) as u8;
+        
+        // Bevy expects RGBA format: [r, g, b, a] as sequential bytes
+        let byte_index = i * 4;
+        image_data[byte_index] = r;
+        image_data[byte_index + 1] = g;
+        image_data[byte_index + 2] = b;
+        image_data[byte_index + 3] = a;
+    }
 }

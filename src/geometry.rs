@@ -6,15 +6,17 @@ use crate::utilities::*;
 #[derive(Debug, Copy, Clone)]
 pub struct Vertex
 {
-    pub position: Vec3,
+    pub position: Vec4,
+    pub normal: Vec3,
     pub color: Vec3,
     pub uv: Vec2,
 }
 
 impl Vertex {
-    pub fn new(position: Vec3, color: Vec3, uv: Vec2) -> Self {
+    pub fn new(position: Vec4, normal: Vec3, color: Vec3, uv: Vec2) -> Self {
         Self {
             position,
+            normal,
             color,
             uv,
         }
@@ -26,9 +28,10 @@ impl Add for Vertex {
 
     fn add(self, rhs: Self) -> Self {
         let position = self.position + rhs.position;
+        let normal = self.normal + rhs.normal;
         let color = self.color + rhs.color;
         let uv = self.uv + rhs.uv;
-        Self::new(position, color, uv)
+        Self::new(position, normal, color, uv)
     }
 }
 
@@ -37,9 +40,10 @@ impl Sub for Vertex {
 
     fn sub(self, rhs: Self) -> Self {
         let position = self.position - rhs.position;
+        let normal = self.normal - rhs.normal;
         let color = self.color - rhs.color;
         let uv = self.uv - rhs.uv;
-        Self::new(position, color, uv)
+        Self::new(position, normal, color, uv)
     }
 }
 
@@ -48,9 +52,10 @@ impl Mul<f32> for Vertex {
 
     fn mul(self, rhs: f32) -> Self {
         let position = self.position * rhs;
+        let normal = self.normal * rhs;
         let color = self.color * rhs;
         let uv = self.uv * rhs;
-        Self::new(position, color, uv)
+        Self::new(position, normal, color, uv)
     }
 }
 
@@ -63,12 +68,12 @@ impl MulAssign<f32> for Vertex {
 }
 
 #[derive(Debug, Clone)]
-pub struct Mesh {
+pub struct MeshRenderer {
     triangles: Vec<UVec3>,
     vertices: Vec<Vertex>,
 }
 
-impl Mesh {
+impl MeshRenderer {
     pub fn new() -> Self {
         Self {
             triangles: Vec::new(),
@@ -93,28 +98,104 @@ impl Mesh {
     }
 
     pub fn from_vertices(triangles: &[UVec3], vertices: &[Vertex]) -> Self {
-        let mut mesh = Mesh::new();
+        let mut mesh = MeshRenderer::new();
         mesh.add_section_from_vertices(triangles, vertices);
         mesh
     }
 
-    // we can also do it with slices
+    // TODO: as Luca said try to exercise doing it with slices
     pub fn add_section_from_vertices(&mut self, triangles: &[UVec3], vertices: &[Vertex]) {
         let offset = self.vertices.len() as u32;
         let triangles: Vec<UVec3> = triangles.iter().map(|tri| *tri + offset).collect();
         self.triangles.extend_from_slice(&triangles);
         self.vertices.extend_from_slice(vertices);
     }
+
+    pub fn add_section_from_buffers(
+    &mut self,
+    triangles: &[UVec3],
+    positions: &[Vec3],
+    normals: &[Vec3],
+    colors: &[Vec3],
+    uvs: &[Vec2],
+) {
+    // Calculate offset before adding new vertices
+    let offset = self.vertices.len() as u32;
+    
+    // Offset triangle indices to account for existing vertices
+    let triangles: Vec<UVec3> = triangles.iter()
+        .map(|tri| *tri + offset)
+        .collect();
+    
+    self.triangles.extend_from_slice(&triangles);
+
+    let has_uvs = !uvs.is_empty();
+    let has_colors = !colors.is_empty();
+
+    for i in 0..positions.len() {
+        let vertex = Vertex::new(
+            positions[i].extend(1.0),
+            normals[i],
+            if has_colors { colors[i] } else { Vec3::ONE },
+            if has_uvs { uvs[i] } else { Vec2::ZERO },
+        );
+        self.vertices.push(vertex)
+    }
+}
+
+    pub fn load_from_gltf(mesh: &gltf::Mesh, buffers: &[gltf::buffer::Data]) -> MeshRenderer {
+        let mut positions: Vec<Vec3> = Vec::new();
+        let mut tex_coords: Vec<Vec2> = Vec::new();
+        let mut normals: Vec<Vec3> = Vec::new();
+        let mut indices = vec![];
+        // TODO: handle errors
+        let mut result = MeshRenderer::new();
+        for primitive in mesh.primitives() {
+            positions.clear();
+            tex_coords.clear();
+            normals.clear();
+            indices.clear();
+
+            let reader = primitive.reader(|buffer| Some(&buffers[buffer.index()]));
+            if let Some(indices_reader) = reader.read_indices() {
+                indices_reader.into_u32().for_each(|i| indices.push(i));
+            }
+            if let Some(positions_reader) = reader.read_positions() {
+                positions_reader.for_each(|p| positions.push(Vec3::new(p[0], p[1], p[2])));
+            }
+            if let Some(normals_reader) = reader.read_normals() {
+                normals_reader.for_each(|n| normals.push(Vec3::new(n[0], n[1], n[2])));
+            }
+            if let Some(tex_coord_reader) = reader.read_tex_coords(0) {
+                tex_coord_reader
+                    .into_f32()
+                    .for_each(|tc| tex_coords.push(Vec2::new(tc[0], tc[1])));
+            }
+
+            let colors: Vec<Vec3> = positions.iter().map(|_| Vec3::ONE).collect();
+            println!("Num indices: {:?}", indices.len());
+            println!("tex_coords: {:?}", tex_coords.len());
+            println!("positions: {:?}", positions.len());
+
+            let triangles: Vec<UVec3> = indices
+                .chunks_exact(3)
+                .map(|tri| UVec3::new(tri[0], tri[1], tri[2]))
+                .collect();
+            result.add_section_from_buffers(&triangles, &positions, &normals, &colors, &tex_coords)
+        }
+        result
+    }
+
 }
 
 // for more on struct initialization check Default trait
-impl Default for Mesh {
+impl Default for MeshRenderer {
     fn default() -> Self {
         Self::new()
     }
 }
 
-impl Add for Mesh {
+impl Add for MeshRenderer {
     type Output = Self;
 
     fn add(self, rhs: Self) -> Self {
@@ -124,7 +205,7 @@ impl Add for Mesh {
     }
 }
 
-impl AddAssign for Mesh {
+impl AddAssign for MeshRenderer {
     fn add_assign(&mut self, rhs: Self) {
         self.add_section_from_vertices(rhs.triangles(), rhs.vertices());
     }
@@ -139,9 +220,9 @@ pub fn raster_triangle(
     z_buffer: &mut Vec<f32>,
     viewport_size: Vec2,
 ) {
-    let clip0 = *mvp * Vec4::from((vertices[0].position, 1.0));
-    let clip1 = *mvp * Vec4::from((vertices[1].position, 1.0));
-    let clip2 = *mvp * Vec4::from((vertices[2].position, 1.0));
+    let clip0 = *mvp * vertices[0].position;
+    let clip1 = *mvp * vertices[1].position;
+    let clip2 = *mvp * vertices[2].position;
 
     let rec0 = 1.0 / clip0.w;
     let rec1 = 1.0 / clip1.w;
@@ -161,8 +242,8 @@ pub fn raster_triangle(
 
     // screeen coordinates remapped to window
     let sc0 = glam::vec2(
-        map_to_range(ndc0.x, -1.0, 1.0, 0.0, viewport_size.x),
-        map_to_range(-ndc0.y, -1.0, 1.0, 0.0, viewport_size.y),
+    map_to_range(ndc0.x, -1.0, 1.0, 0.0, viewport_size.x),
+    map_to_range(-ndc0.y, -1.0, 1.0, 0.0, viewport_size.y),
     );
     let sc1 = glam::vec2(
         map_to_range(ndc1.x, -1.0, 1.0, 0.0, viewport_size.x),
@@ -173,54 +254,61 @@ pub fn raster_triangle(
         map_to_range(-ndc2.y, -1.0, 1.0, 0.0, viewport_size.y),
     );
 
-    for (i, pixel) in buffer.iter_mut().enumerate() {
-        let coords = index_to_coords(i, viewport_size.y as usize);
-        // center of the pixel
-        let coords = glam::vec2(coords.0 as f32, coords.1 as f32) + 0.5;
+    let area = edge_function(sc0, sc1, sc2);
 
-        let area = edge_function(sc0, sc1, sc2);
+    if area <= 0.0 {
+        return;
+    }
 
-        if let Some(bary) = barycentric_coordinates(coords, sc0, sc1, sc2, area) {
-            //interpolated 1/z(w)
-            let correction = bary.x * rec0 + bary.y * rec1 + bary.z * rec2;
-            let depth = correction;
-            // 1/(1/z) = z
-            let correction = 1.0 / correction;
+    // AABB to avoid iterating through the whole buffer
+    let min_x = sc0.x.min(sc1.x).min(sc2.x).floor() as i32;
+    let max_x = sc0.x.max(sc1.x).max(sc2.x).ceil() as i32;
+    let min_y = sc0.y.min(sc1.y).min(sc2.y).floor() as i32;
+    let max_y = sc0.y.max(sc1.y).max(sc2.y).ceil() as i32;
 
-            if depth < z_buffer[i] {
-                z_buffer[i] = depth;
-                // Color using vertex colors
-                let color = bary.x * v0.color + bary.y * v1.color + bary.z * v2.color;
-                let color = color * correction;
-                let color = to_argb(
-                    255,
-                    (color.x * 255.0) as u8,
-                    (color.y * 255.0) as u8,
-                    (color.z * 255.0) as u8,
-                );
-                /*
-                // Otherwise using texture
-                if let Some(tex) = texture {
-                    let tex_coords = bary.x * v0.uv + bary.y * v1.uv + bary.z * v2.uv;
-                    let tex_coords = tex_coords * correction;
+    // Clamp to screen bounds
+    let min_x = min_x.max(0) as usize;
+    let max_x = max_x.min(viewport_size.x as i32) as usize;
+    let min_y = min_y.max(0) as usize;
+    let max_y = max_y.min(viewport_size.y as i32) as usize;
 
-                    color = tex.argb_at_uv(tex_coords.x, tex_coords.y);
+    for y in min_y..max_y {
+        for x in min_x..max_x {
+            let coords = glam::vec2(x as f32, y as f32) + 0.5;
+            let i = coords_to_index(x, y, viewport_size.x as usize);
+
+            if let Some(bary) = barycentric_coordinates(coords, sc0, sc1, sc2, area) {
+                let correction = bary.x * rec0 + bary.y * rec1 + bary.z * rec2;
+                let depth = correction;
+                let correction = 1.0 / correction;
+
+                if depth < z_buffer[i] {
+                    z_buffer[i] = depth;
+                    let color = bary.x * v0.color + bary.y * v1.color + bary.z * v2.color;
+                    let color = color * correction;
+                    let mut color = to_argb(
+                        255,
+                        (color.x * 255.0) as u8,
+                        (color.y * 255.0) as u8,
+                        (color.z * 255.0) as u8,
+                    );
+                    
+                    if let Some(tex) = texture {
+                        let tex_coords = bary.x * v0.uv + bary.y * v1.uv + bary.z * v2.uv;
+                        let tex_coords = tex_coords * correction;
+                        color = tex.argb_at_uv(tex_coords.x, tex_coords.y);
+                    }
+                    
+                    buffer[i] = color;
                 }
-                color = to_argb(
-                    255,
-                    (depth * 255.0) as u8,
-                    (depth * 255.0) as u8,
-                    (depth * 255.0) as u8,
-                );
-                 */
-                *pixel = color;
             }
         }
     }
+
 }
 
 pub fn raster_mesh(
-    mesh: &Mesh,
+    mesh: &MeshRenderer,
     mvp: &Mat4,
     texture: Option<&Texture>,
     buffer: &mut Vec<u32>,

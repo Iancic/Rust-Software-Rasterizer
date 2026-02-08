@@ -139,7 +139,7 @@ fn render(
     clear_buffer(&mut framebuffer.buffer, 0);
     clear_buffer(z_buffer, f32::INFINITY);
 
-    raster_mesh(
+    render_scene(
         &*mesh,
         &(proj * view * parent_local),
         Some(&*texture),
@@ -192,6 +192,7 @@ fn render_egui(mut contexts: EguiContexts, mut model: ResMut<ModelTransform>) {
 
 fn main()
 {
+    // Integrated with Bevy ;)
     App::new()
         .add_plugins(DefaultPlugins)
         .add_plugins(EguiPlugin::default())

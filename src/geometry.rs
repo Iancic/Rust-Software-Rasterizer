@@ -1,7 +1,11 @@
+use bevy::math::ops::ceil;
 use glam::{UVec3, Vec2, Vec3, Vec4, Mat4};
 use std::ops::{Add, AddAssign, MulAssign, Sub, Mul};
 use crate::texture::*;
 use crate::utilities::*;
+use crate::window::SCREEN_HEIGHT;
+use crate::window::SCREEN_WIDTH;
+use bevy::prelude::ops::floor;
 
 #[derive(Debug, Copy, Clone)]
 pub struct Vertex
@@ -308,6 +312,140 @@ pub fn raster_triangle(
 
 }
 
+// Utilities for Method 2:
+// Tile: framebuffer split into AABB borders
+#[derive(Default)]
+pub struct Tile{
+    pub min_x: i32,
+    pub min_y: i32,
+    pub max_x: i32, 
+    pub max_y: i32,
+}
+
+// Bin: collection of triangles inside one tile
+pub struct Bin{
+    pub triangle_indices: Vec<i32>
+}
+
+pub struct Setup{
+    pub tiles: Vec<Tile>,
+    pub bins: Vec<Bin>,
+}
+
+// ASK about structuring you framebuffer in a morton order for that simd and better chaches reads when sampling textures
+
+
+// Populates all the tiles from the setup
+// Filter the rendering based on bins and triangles.
+pub fn setup_tiles(framebuffer_width: f32, framebuffer_height: f32, tile_size: i32) -> Setup{
+    // Split the screen in tiles
+    // ASK: Tile size should be like the aspect ratio for max gains? 
+    //      Or different width height also possible?
+    let number_tiles_horizontal = ceil(framebuffer_width / tile_size as f32);
+    let number_tiles_vertical = ceil(framebuffer_height / tile_size as f32);
+
+    let mut tiles: Vec<Tile> = Vec::with_capacity(framebuffer_width as usize * framebuffer_height as usize);
+    let mut bins: Vec<Bin> = Vec::with_capacity(framebuffer_width as usize * framebuffer_height as usize);
+
+    for i in 0..number_tiles_horizontal as i32
+    {
+        for j in 0..number_tiles_vertical as i32
+        {
+            let id = i as f32 * number_tiles_horizontal + j as f32;
+            let tile = Tile{..Default::default()};
+            tiles.push(tile);
+            bins.push(Bin { triangle_indices: Vec::new() }); // empty bins
+            tiles[id as usize].min_x = i * tile_size;
+            tiles[id as usize].min_y = j * tile_size;
+            tiles[id as usize].max_x = (i + 1) * tile_size;
+            tiles[id as usize].max_y = (j + 1) * tile_size;
+        }
+    }
+    
+    Setup{tiles:tiles, bins:bins}
+}
+
+pub fn bin_triangle(mut setup: &mut Setup, bin_id: usize, tri_id: i32)
+{
+    setup.bins[bin_id].triangle_indices.push(tri_id); 
+}
+
+// Populated the bins from setup
+// Go through each triangle and 
+pub fn bin_triangles(mesh: &MeshRenderer, mut setup: &mut Setup, triangles: &Vec<UVec3>, mvp: &Mat4, tile_size: i32, number_tiles_horizontal: f32){
+
+    // coolest Rust out there this iterator loop
+    for (tri_id, triangle) in mesh.triangles().iter().enumerate() {
+        // find out over which bins this triangle is
+        // I loop over those where I call bin triangle so save the triangle in that bin
+
+        // ABB of tri
+        let vertices = mesh.get_vertices_from_triangle(*triangle);
+
+        let clip0 = *mvp * vertices[0].position;
+        let clip1 = *mvp * vertices[1].position;
+        let clip2 = *mvp * vertices[2].position;
+
+        let rec0 = 1.0 / clip0.w;
+        let rec1 = 1.0 / clip1.w;
+        let rec2 = 1.0 / clip2.w;
+
+        // This would be the output of the vertex shader (clip space)
+        // then we perform perspective division to transform in ndc
+        // now x,y,z componend of ndc are between -1 and 1
+        let ndc0 = clip0 * rec0;
+        let ndc1 = clip1 * rec1;     
+        let ndc2 = clip2 * rec2;
+
+        // screeen coordinates remapped to window
+        let sc0 = glam::vec2(
+        map_to_range(ndc0.x, -1.0, 1.0, 0.0, SCREEN_WIDTH as f32),
+        map_to_range(ndc0.y, -1.0, 1.0, 0.0, SCREEN_HEIGHT as f32),
+        );
+        let sc1 = glam::vec2(
+            map_to_range(ndc1.x, -1.0, 1.0, 0.0, SCREEN_WIDTH as f32),
+            map_to_range(ndc1.y, -1.0, 1.0, 0.0, SCREEN_HEIGHT as f32),
+        );
+        let sc2 = glam::vec2(
+            map_to_range(ndc2.x, -1.0, 1.0, 0.0, SCREEN_WIDTH as f32),
+            map_to_range(ndc2.y, -1.0, 1.0, 0.0, SCREEN_HEIGHT as f32),
+        );
+
+        // aabb in screen space
+        let min_x = sc0.x.min(sc1.x).min(sc2.x);
+        let min_y = sc0.y.min(sc1.y).min(sc2.y);
+        let max_x = sc0.x.max(sc1.x).max(sc2.x);
+        let max_y = sc0.y.max(sc1.y).max(sc2.y);
+        
+        // to which bin it belongs to
+        // with floor give me the last tile and include it in the loop
+        // with ceil i say give me one past the last tile, but it's excluded cause the for loop is .. not ..=
+        // it can be both with floor but then i say ..=
+
+        let tile_min_x = floor(min_x / tile_size as f32);
+        let tile_max_x = ceil(max_x / tile_size as f32);
+        let tile_min_y = floor(min_y / tile_size as f32);
+        let tile_max_y = ceil(max_y / tile_size as f32);
+
+        // we determined whikl tiles the triangle aabb overlaps. by dividing the aabb coords
+        // by tile size i get tile indices.
+        // a triangle can span multiple tiles so I iterate over all tiles in the range
+
+        for tile_y in tile_min_y as i32..tile_max_y as i32
+        {
+            for tile_x in tile_min_x as i32..tile_max_x as i32
+            {
+                let bin_id = tile_y * number_tiles_horizontal as i32 + tile_x;
+                // bin it for those
+                bin_triangle(setup, bin_id.try_into().unwrap(), tri_id as i32);
+            }
+        }
+
+        
+    }
+}
+
+// Method 1: Iterate over all triangles from mesh and rasterize.
 pub fn raster_mesh(
     mesh: &MeshRenderer,
     mvp: &Mat4,
@@ -319,5 +457,56 @@ pub fn raster_mesh(
     for triangle in mesh.triangles() {
         let vertices = mesh.get_vertices_from_triangle(*triangle);
         raster_triangle(&vertices, mvp, texture, buffer, z_buffer, viewport_size);
+    }
+}
+
+// Method 2: Bin triangles from mesh into tiles. Rasterize tiles on multiple threads.
+pub fn render_tile(
+    setup: &Setup, 
+    bin_id: f32, 
+    mesh: &MeshRenderer,
+    mvp: &Mat4, 
+    texture: Option<&Texture>, 
+    buffer: &mut Vec<u32>,
+    z_buffer: &mut Vec<f32>,
+    viewport_size: Vec2,){
+    // this is the functions that will run on multiple threads
+
+    let bin = &setup.bins[bin_id as usize];
+
+    for tri_index in 0..bin.triangle_indices.len()
+    {
+        let triangle = mesh.triangles()[bin.triangle_indices[tri_index] as usize];
+        let vertices = mesh.get_vertices_from_triangle(triangle);
+        raster_triangle(&vertices, mvp, texture, buffer, z_buffer, viewport_size);
+    }
+}
+
+pub fn render_scene(
+    mesh: &MeshRenderer,
+    mvp: &Mat4,
+    texture: Option<&Texture>,
+    buffer: &mut Vec<u32>,
+    z_buffer: &mut Vec<f32>,
+    viewport_size: Vec2,)
+{
+    // create and populate tiles with aabb from grid
+    let tile_size = 64;
+    let mut scene_setup = setup_tiles(SCREEN_WIDTH as f32, SCREEN_HEIGHT as f32, tile_size); // ASK ABOUT THE SIZE, look in setup
+
+    let number_tiles_horizontal = ceil(SCREEN_WIDTH as f32 / tile_size as f32);
+    let number_tiles_vertical = ceil(SCREEN_HEIGHT as f32 / tile_size as f32);
+
+    // populate bins with tris
+    bin_triangles(mesh, &mut scene_setup, mesh.triangles(), mvp, tile_size, number_tiles_horizontal);
+
+    // go through each tile and rasterize the tris in that bin
+    for i in 0..number_tiles_horizontal as i32
+    {
+        for j in 0..number_tiles_vertical as i32
+        {
+            let which_bin = i as f32 * number_tiles_horizontal + j as f32;
+            render_tile(&scene_setup,which_bin, mesh, mvp, texture,  buffer, z_buffer, viewport_size); // pass bin
+        }
     }
 }

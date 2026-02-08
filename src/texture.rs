@@ -2,20 +2,24 @@ use crate::utilities::*;
 use stb_image;
 use std::path::Path;
 
-pub struct Texture
-{
+pub struct Texture {
     pub width: usize,
     pub height: usize,
     pub data: Vec<u32>,
 }
 
-impl Texture{
+impl Texture {
     pub fn load(path: &Path) -> Self {
         let decoded_image = stb_image::image::load(path);
         if let stb_image::image::LoadResult::ImageU8(image) = decoded_image {
             let data = (0..image.data.len() / 3)
                 .map(|id| {
-                    to_argb( 255, image.data[id * 3], image.data[id * 3 + 1], image.data[id * 3 + 2])
+                    to_argb(
+                        255,
+                        image.data[id * 3],
+                        image.data[id * 3 + 1],
+                        image.data[id * 3 + 2],
+                    )
                 })
                 .collect();
             Self {
@@ -28,8 +32,7 @@ impl Texture{
         }
     }
 
-    pub fn argb_at_uv(&self, u: f32, v: f32) -> u32
-    {
+    pub fn argb_at_uv(&self, u: f32, v: f32) -> u32 {
         // Claude Sonnet 4.5 improved
         // glTF default sampler wrapping is REPEAT. Using rem_euclid keeps negatives sane too.
         let u = u.rem_euclid(1.0);
@@ -49,5 +52,4 @@ impl Texture{
             to_argb(255, 255, 0, 255)
         }
     }
-
 }

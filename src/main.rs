@@ -2,16 +2,18 @@ use std::path::Path;
 
 use bevy::prelude::*;
 use bevy::render::render_resource::{Extent3d, TextureDimension, TextureFormat};
-use bevy_egui::{egui, EguiContexts, EguiPlugin, EguiPrimaryContextPass};
+use bevy_egui::{EguiContexts, EguiPlugin, EguiPrimaryContextPass, egui};
 use glam::Vec3 as GVec3;
-// Store 
+use std::sync::atomic::AtomicU32;
+
 #[derive(Resource)]
 struct RasterizerState {
     framebuffer: Framebuffer,
-    z_buffer: Vec<f32>,
+    z_buffer: Vec<AtomicU32>,
     mesh: MeshRenderer,
     texture: Texture,
     camera: RendererCamera,
+    wireframe: bool
 }
 
 // This is attached to an entity so I can acces the buffer anytime.
@@ -25,36 +27,39 @@ struct ModelTransform {
     scale: GVec3,
 }
 
-mod utilities;
-mod texture;
-mod geometry;
-mod window;
-mod framebuffer;
 mod camera;
+mod framebuffer;
+mod geometry;
+mod texture;
 mod transform;
+mod utilities;
+mod window;
 
+use crate::camera::*;
+use crate::framebuffer::*;
 use crate::geometry::*;
+use crate::texture::*;
 use crate::transform::Transform as RasterTransform;
 use crate::utilities::*;
-use crate::camera::*;
-use crate::texture::*;
-use crate::framebuffer::*;
 use crate::window::*;
 
-
-fn startup(mut commands: Commands,
-    mut images: ResMut<Assets<Image>>,){
+fn startup(mut commands: Commands, mut images: ResMut<Assets<Image>>) {
     // Resources (object, texture and z buffer)
-    let z_buffer = vec![f32::INFINITY; SCREEN_HEIGHT * SCREEN_WIDTH];
-
+    let z_buffer: Vec<AtomicU32> = (0..SCREEN_WIDTH * SCREEN_HEIGHT)
+    .map(|_| AtomicU32::new(f32::INFINITY.to_bits()))
+    .collect();
     let camera = RendererCamera::default();
 
     let texture = Texture::load(Path::new("assets/DamagedHelmet_albedo.jpg"));
     let mesh = load_gltf(Path::new("assets/DamagedHelmet.gltf"));
 
+    let wireframe = true;
+
     // Framebuffer to rasterize into
-    let framebuffer = Framebuffer{
-        buffer: vec![0; SCREEN_WIDTH * SCREEN_HEIGHT]
+    let framebuffer = Framebuffer {
+    buffer: (0..SCREEN_WIDTH * SCREEN_HEIGHT)
+        .map(|_| AtomicU32::new(0))
+        .collect(),
     };
 
     // Create a Bevy image (GPU texture) from your framebuffer
@@ -85,7 +90,7 @@ fn startup(mut commands: Commands,
 
     // Spawn a camera so the sprite gets rendered
     commands.spawn(Camera2d);
-    
+
     // Store the rasterizer state and image handle as resources
     commands.insert_resource(RasterizerState {
         framebuffer,
@@ -93,6 +98,7 @@ fn startup(mut commands: Commands,
         mesh,
         texture,
         camera,
+        wireframe,
     });
     commands.insert_resource(FramebufferImageHandle(image_handle));
     commands.insert_resource(ModelTransform {
@@ -100,22 +106,16 @@ fn startup(mut commands: Commands,
         rotation_deg: GVec3::ZERO,
         scale: GVec3::ONE,
     });
-
 }
 
-fn update(){
-
-}
+fn update() {}
 
 fn render(
     mut images: ResMut<Assets<Image>>,
     image_handle: Res<FramebufferImageHandle>,
     mut state: ResMut<RasterizerState>,
     model: Res<ModelTransform>,
-    ){
-    
-    // The custom rendering begins here
-
+) {
     // Matrixes for model, view and projection space for rasterization.
     let rotation = glam::Quat::from_euler(
         glam::EulerRot::XYZ,
@@ -130,22 +130,29 @@ fn render(
         mesh,
         texture,
         camera,
+        wireframe
     } = &mut *state;
 
     let view = camera.view();
     let proj = camera.projection();
 
     // Clear color and depth
-    clear_buffer(&mut framebuffer.buffer, 0);
-    clear_buffer(z_buffer, f32::INFINITY);
+    for pixel in framebuffer.buffer.iter() {
+    pixel.store(0, std::sync::atomic::Ordering::Relaxed);
+    }
+
+    for z in z_buffer.iter() {
+        z.store(f32::INFINITY.to_bits(), std::sync::atomic::Ordering::Relaxed);
+    }
 
     render_scene(
         &*mesh,
         &(proj * view * parent_local),
         Some(&*texture),
-        &mut framebuffer.buffer,
+        &framebuffer.buffer,
         z_buffer,
         glam::vec2(SCREEN_WIDTH as f32, SCREEN_HEIGHT as f32),
+        *wireframe
     );
 
     // Credit: Codex 5.2 + utility to convert
@@ -156,10 +163,9 @@ fn render(
             convert_framebuffer_to_image(&framebuffer.buffer, data);
         }
     }
-
 }
 
-fn render_egui(mut contexts: EguiContexts, mut model: ResMut<ModelTransform>) {
+fn render_egui(mut contexts: EguiContexts, mut model: ResMut<ModelTransform>, mut state: ResMut<RasterizerState>) {
     if let Ok(ctx) = contexts.ctx_mut() {
         // Credit: Codex 5.2
         egui::Window::new("Model Transform").show(ctx, |ui| {
@@ -186,15 +192,22 @@ fn render_egui(mut contexts: EguiContexts, mut model: ResMut<ModelTransform>) {
                 model.rotation_deg = GVec3::ZERO;
                 model.scale = GVec3::ONE;
             }
+
+            ui.toggle_value(&mut state.wireframe, "Wireframe")
         });
     }
 }
 
-fn main()
-{
-    // Integrated with Bevy ;)
+fn main() {
     App::new()
-        .add_plugins(DefaultPlugins)
+        .add_plugins(DefaultPlugins.set(WindowPlugin {
+            primary_window: Some(Window {
+                resolution: bevy::window::WindowResolution::new(SCREEN_WIDTH as u32, SCREEN_HEIGHT as u32),
+                title: "Rasterizer".to_string(),
+                ..default()
+            }),
+            ..default()
+        }))
         .add_plugins(EguiPlugin::default())
         .add_systems(Startup, startup)
         .add_systems(Update, update)

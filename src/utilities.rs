@@ -1,9 +1,11 @@
+use crate::{geometry::MeshRenderer, window::SCREEN_WIDTH};
+use bevy::prelude::ops::abs;
 use glam::{Vec2, Vec3};
+use std::cmp::max;
 use std::path::Path;
-use crate::geometry::MeshRenderer;
+use std::sync::atomic::AtomicU32;
 
-pub fn edge_function(v0: Vec2, v1: Vec2, point: Vec2) -> f32
-{
+pub fn edge_function(v0: Vec2, v1: Vec2, point: Vec2) -> f32 {
     (point.x - v0.x) * (v1.y - v0.y) - (point.y - v0.y) * (v1.x - v0.x)
 }
 
@@ -26,8 +28,7 @@ pub fn barycentric_coordinates(
     }
 }
 
-pub fn to_argb(a: u8, r: u8, g: u8, b: u8) -> u32
-{
+pub fn to_argb(a: u8, r: u8, g: u8, b: u8) -> u32 {
     let mut color: u32 = a as u32;
     color = (color << 8) + r as u32;
     color = (color << 8) + g as u32;
@@ -35,8 +36,7 @@ pub fn to_argb(a: u8, r: u8, g: u8, b: u8) -> u32
     color
 }
 
-pub fn coords_to_index(u: usize, v: usize, width: usize) -> usize
-{
+pub fn coords_to_index(u: usize, v: usize, width: usize) -> usize {
     u + v * width
 }
 
@@ -78,20 +78,41 @@ pub fn load_gltf(path: &Path) -> MeshRenderer {
 
 // Credit: Claude Sonnet 4.5
 // Helper function to convert your u32 ARGB format to Bevy's RGBA8 byte format
-pub fn convert_framebuffer_to_image(framebuffer: &[u32], image_data: &mut [u8]) {
-    for (i, &pixel) in framebuffer.iter().enumerate() {
+pub fn convert_framebuffer_to_image(framebuffer: &[AtomicU32], image_data: &mut [u8]) {
+    for (i, pixel) in framebuffer.iter().enumerate() {
+        let pixel = pixel.load(std::sync::atomic::Ordering::Relaxed);
         // Your pixel is packed as: (alpha << 24) | (red << 16) | (green << 8) | blue
         // Extract each component
         let a = ((pixel >> 24) & 0xFF) as u8;
         let r = ((pixel >> 16) & 0xFF) as u8;
         let g = ((pixel >> 8) & 0xFF) as u8;
         let b = (pixel & 0xFF) as u8;
-        
+
         // Bevy expects RGBA format: [r, g, b, a] as sequential bytes
         let byte_index = i * 4;
         image_data[byte_index] = r;
         image_data[byte_index + 1] = g;
         image_data[byte_index + 2] = b;
         image_data[byte_index + 3] = a;
+    }
+}
+
+pub fn bresenham_line(buffer: &[AtomicU32], color: u32, x1: f32, y1: f32, x2: f32, y2: f32) {
+    let dx = x2 - x1;
+    let dy = y2 - y1;
+
+    let steps = f32::max(abs(dx), abs(dy));
+    let x_inc = dx / steps;
+    let y_inc = dy / steps;
+
+    let mut x = x1;
+    let mut y = y1;
+
+    for i in 0..steps as i32 {
+        let index = coords_to_index(x as usize, y as usize, SCREEN_WIDTH as usize);
+        buffer[index].store(color, std::sync::atomic::Ordering::Relaxed);
+
+        x += x_inc;
+        y += y_inc;
     }
 }

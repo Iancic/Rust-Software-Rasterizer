@@ -1,4 +1,5 @@
-pub struct Framebuffer
-{
-    pub buffer: Vec<u32>
+use std::sync::atomic::AtomicU32;
+
+pub struct Framebuffer {
+    pub buffer: Vec<AtomicU32 >,
 }

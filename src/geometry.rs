@@ -6,6 +6,13 @@ use crate::utilities::*;
 use crate::window::SCREEN_HEIGHT;
 use crate::window::SCREEN_WIDTH;
 use bevy::prelude::ops::floor;
+use rand::Rng;
+use rand::rngs::StdRng;
+use rand::SeedableRng;
+use std::thread;
+use std::cmp::Ordering;
+use std::sync::atomic::{AtomicU32};
+use rayon::prelude::*;
 
 #[derive(Debug, Copy, Clone)]
 pub struct Vertex
@@ -220,8 +227,8 @@ pub fn raster_triangle(
     vertices: &[&Vertex; 3],
     mvp: &Mat4,
     texture: Option<&Texture>,
-    buffer: &mut Vec<u32>,
-    z_buffer: &mut Vec<f32>,
+    buffer: &[AtomicU32],
+    z_buffer: &[AtomicU32],
     viewport_size: Vec2,
 ) {
     let clip0 = *mvp * vertices[0].position;
@@ -287,8 +294,8 @@ pub fn raster_triangle(
                 let depth = correction;
                 let correction = 1.0 / correction;
 
-                if depth < z_buffer[i] {
-                    z_buffer[i] = depth;
+                if depth < f32::from_bits(z_buffer[i].load(std::sync::atomic::Ordering::Relaxed)) {
+                    z_buffer[i].store(depth.to_bits(), std::sync::atomic::Ordering::Relaxed);
                     let color = bary.x * v0.color + bary.y * v1.color + bary.z * v2.color;
                     let color = color * correction;
                     let mut color = to_argb(
@@ -304,11 +311,54 @@ pub fn raster_triangle(
                         color = tex.argb_at_uv(tex_coords.x, tex_coords.y);
                     }
                     
-                    buffer[i] = color;
+                    buffer[i].store(color, std::sync::atomic::Ordering::Relaxed)
                 }
             }
         }
     }
+
+}
+
+
+pub fn raster_triangle_wireframe(
+    vertices: &[&Vertex; 3],
+    mvp: &Mat4,
+    buffer: &[AtomicU32],
+    viewport_size: Vec2,
+    color: u32
+) {
+    let clip0 = *mvp * vertices[0].position;
+    let clip1 = *mvp * vertices[1].position;
+    let clip2 = *mvp * vertices[2].position;
+
+    let rec0 = 1.0 / clip0.w;
+    let rec1 = 1.0 / clip1.w;
+    let rec2 = 1.0 / clip2.w;
+
+    // This would be the output of the vertex shader (clip space)
+    // then we perform perspective division to transform in ndc
+    // now x,y,z componend of ndc are between -1 and 1
+    let ndc0 = clip0 * rec0;
+    let ndc1 = clip1 * rec1;
+    let ndc2 = clip2 * rec2;
+
+    // screeen coordinates remapped to window
+    let sc0 = glam::vec2(
+    map_to_range(ndc0.x, -1.0, 1.0, 0.0, viewport_size.x),
+    map_to_range(ndc0.y, -1.0, 1.0, 0.0, viewport_size.y),
+    );
+    let sc1 = glam::vec2(
+        map_to_range(ndc1.x, -1.0, 1.0, 0.0, viewport_size.x),
+        map_to_range(ndc1.y, -1.0, 1.0, 0.0, viewport_size.y),
+    );
+    let sc2 = glam::vec2(
+        map_to_range(ndc2.x, -1.0, 1.0, 0.0, viewport_size.x),
+        map_to_range(ndc2.y, -1.0, 1.0, 0.0, viewport_size.y),
+    );
+
+    bresenham_line(buffer, color, sc0.x, sc0.y, sc1.x, sc1.y);
+    bresenham_line(buffer, color,sc0.x, sc0.y, sc2.x, sc2.y);
+    bresenham_line(buffer, color, sc2.x, sc2.y, sc1.x, sc1.y);
 
 }
 
@@ -333,7 +383,6 @@ pub struct Setup{
 }
 
 // ASK about structuring you framebuffer in a morton order for that simd and better chaches reads when sampling textures
-
 
 // Populates all the tiles from the setup
 // Filter the rendering based on bins and triangles.
@@ -365,14 +414,14 @@ pub fn setup_tiles(framebuffer_width: f32, framebuffer_height: f32, tile_size: i
     Setup{tiles:tiles, bins:bins}
 }
 
-pub fn bin_triangle(mut setup: &mut Setup, bin_id: usize, tri_id: i32)
+pub fn bin_triangle(setup: &mut Setup, bin_id: usize, tri_id: i32)
 {
     setup.bins[bin_id].triangle_indices.push(tri_id); 
 }
 
 // Populated the bins from setup
 // Go through each triangle and 
-pub fn bin_triangles(mesh: &MeshRenderer, mut setup: &mut Setup, triangles: &Vec<UVec3>, mvp: &Mat4, tile_size: i32, number_tiles_horizontal: f32){
+pub fn bin_triangles(mesh: &MeshRenderer, setup: &mut Setup, mvp: &Mat4, tile_size: i32, number_tiles_horizontal: f32){
 
     // coolest Rust out there this iterator loop
     for (tri_id, triangle) in mesh.triangles().iter().enumerate() {
@@ -450,8 +499,8 @@ pub fn raster_mesh(
     mesh: &MeshRenderer,
     mvp: &Mat4,
     texture: Option<&Texture>,
-    buffer: &mut Vec<u32>,
-    z_buffer: &mut Vec<f32>,
+    buffer: &[AtomicU32],
+    z_buffer: &[AtomicU32],
     viewport_size: Vec2,
 ) {
     for triangle in mesh.triangles() {
@@ -463,13 +512,14 @@ pub fn raster_mesh(
 // Method 2: Bin triangles from mesh into tiles. Rasterize tiles on multiple threads.
 pub fn render_tile(
     setup: &Setup, 
-    bin_id: f32, 
+    bin_id: usize, 
     mesh: &MeshRenderer,
     mvp: &Mat4, 
     texture: Option<&Texture>, 
-    buffer: &mut Vec<u32>,
-    z_buffer: &mut Vec<f32>,
-    viewport_size: Vec2,){
+    buffer: &[AtomicU32],
+    z_buffer: &[AtomicU32],
+    viewport_size: Vec2,
+    wireframe: bool){
     // this is the functions that will run on multiple threads
 
     let bin = &setup.bins[bin_id as usize];
@@ -478,7 +528,19 @@ pub fn render_tile(
     {
         let triangle = mesh.triangles()[bin.triangle_indices[tri_index] as usize];
         let vertices = mesh.get_vertices_from_triangle(triangle);
-        raster_triangle(&vertices, mvp, texture, buffer, z_buffer, viewport_size);
+        if wireframe
+        {
+                let mut rng = StdRng::seed_from_u64(bin_id as u64);
+                let r = rng.random_range(0..255) as u8;
+                let g = rng.random_range(0..255) as u8;
+                let b = rng.random_range(0..255) as u8;
+                let color = to_argb(255, r, g, b);
+                raster_triangle_wireframe(&vertices, mvp, buffer, viewport_size, color);
+        }
+        else
+        {
+            raster_triangle(&vertices, mvp, texture, buffer, z_buffer, viewport_size);
+        }
     }
 }
 
@@ -486,9 +548,10 @@ pub fn render_scene(
     mesh: &MeshRenderer,
     mvp: &Mat4,
     texture: Option<&Texture>,
-    buffer: &mut Vec<u32>,
-    z_buffer: &mut Vec<f32>,
-    viewport_size: Vec2,)
+    buffer: &[AtomicU32],
+    z_buffer: &[AtomicU32],
+    viewport_size: Vec2,
+    wireframe: bool)
 {
     // create and populate tiles with aabb from grid
     let tile_size = 64;
@@ -498,15 +561,37 @@ pub fn render_scene(
     let number_tiles_vertical = ceil(SCREEN_HEIGHT as f32 / tile_size as f32);
 
     // populate bins with tris
-    bin_triangles(mesh, &mut scene_setup, mesh.triangles(), mvp, tile_size, number_tiles_horizontal);
+    bin_triangles(mesh, &mut scene_setup, mvp, tile_size, number_tiles_horizontal);
 
-    // go through each tile and rasterize the tris in that bin
-    for i in 0..number_tiles_horizontal as i32
+    let total_tiles = number_tiles_horizontal * number_tiles_vertical;
+    let scene_setup = &scene_setup; 
+
+    // BEFORE no rayon crate, one thread per tile
+    /*
+    // Render tris
+    std::thread::scope(|s| {
+        for tile in 0..total_tiles as i32 {
+            s.spawn(move || {
+                render_tile(scene_setup,tile as usize, mesh, mvp, texture,  buffer, z_buffer, viewport_size, wireframe);
+            });
+        }
+    });
+    */
+
+    std::thread::scope(|s| {
+        (0..total_tiles as i32).into_par_iter().for_each(|tile| {
+            render_tile(scene_setup, tile as usize, mesh, mvp, texture, buffer, z_buffer, viewport_size, wireframe);
+        });
+    });
+
+    if wireframe
     {
-        for j in 0..number_tiles_vertical as i32
+        // Render lines
+        for j in 0..number_tiles_horizontal as i32
         {
-            let which_bin = i as f32 * number_tiles_horizontal + j as f32;
-            render_tile(&scene_setup,which_bin, mesh, mvp, texture,  buffer, z_buffer, viewport_size); // pass bin
+            let color = to_argb(255, 255, 255, 255); 
+            bresenham_line(buffer, color, j as f32 * tile_size as f32, 0 as f32, j as f32 * tile_size as f32, SCREEN_HEIGHT as f32);
+            bresenham_line(buffer, color, 0 as f32, j as f32 * tile_size as f32, SCREEN_WIDTH as f32, j as f32 * tile_size as f32 as f32);
         }
     }
 }

@@ -1,7 +1,6 @@
-use crate::{geometry::MeshRenderer, window::SCREEN_WIDTH};
+use crate::{geometry::MeshRenderer, window::{SCREEN_WIDTH, SCREEN_HEIGHT}};
 use bevy::prelude::ops::abs;
 use glam::{Vec2, Vec3};
-use std::cmp::max;
 use std::path::Path;
 use std::sync::atomic::AtomicU32;
 
@@ -19,9 +18,11 @@ pub fn barycentric_coordinates(
     let m0 = edge_function(point, v1, v2);
     let m1 = edge_function(point, v2, v0);
     let m2 = edge_function(point, v0, v1);
-    // instead of 3 divisions we can do 1/area *
+
+    // area and m0/m1/m2 share the same sign (positive for CCW, negative for CW in screen space)
+    // dividing same-sign values always yields positive bary coords
     let a = 1.0 / area;
-    if m0 >= 0.0 && m1 >= 0.0 && m2 >= 0.0 {
+    if (m0 >= 0.0 && m1 >= 0.0 && m2 >= 0.0) || (m0 <= 0.0 && m1 <= 0.0 && m2 <= 0.0) {
         Some(glam::vec3(m0 * a, m1 * a, m2 * a))
     } else {
         None
@@ -40,8 +41,6 @@ pub fn coords_to_index(u: usize, v: usize, width: usize) -> usize {
     u + v * width
 }
 
-// ASK ABOUT THIS
-// NDC to map to screen
 pub fn map_to_range<T>(v: T, a1: T, a2: T, b1: T, b2: T) -> T
 where
     T: std::ops::Sub<Output = T>
@@ -51,15 +50,6 @@ where
         + Copy,
 {
     b1 + (v - a1) * (b2 - b1) / (a2 - a1)
-}
-
-// NOTE: learn more about templates
-pub fn clear_buffer<T>(buffer: &mut Vec<T>, value: T)
-where
-    T: Copy,
-{
-    // will "consume" the iterator and return the n of iterations
-    buffer.iter_mut().map(|x| *x = value).count();
 }
 
 pub fn load_gltf(path: &Path) -> MeshRenderer {
@@ -81,7 +71,7 @@ pub fn load_gltf(path: &Path) -> MeshRenderer {
 pub fn convert_framebuffer_to_image(framebuffer: &[AtomicU32], image_data: &mut [u8]) {
     for (i, pixel) in framebuffer.iter().enumerate() {
         let pixel = pixel.load(std::sync::atomic::Ordering::Relaxed);
-        // Your pixel is packed as: (alpha << 24) | (red << 16) | (green << 8) | blue
+        // (alpha << 24) | (red << 16) | (green << 8) | blue
         // Extract each component
         let a = ((pixel >> 24) & 0xFF) as u8;
         let r = ((pixel >> 16) & 0xFF) as u8;
@@ -102,16 +92,22 @@ pub fn bresenham_line(buffer: &[AtomicU32], color: u32, x1: f32, y1: f32, x2: f3
     let dy = y2 - y1;
 
     let steps = f32::max(abs(dx), abs(dy));
+    if steps == 0.0 {
+        return;
+    }
     let x_inc = dx / steps;
     let y_inc = dy / steps;
 
     let mut x = x1;
     let mut y = y1;
 
-    for i in 0..steps as i32 {
-        let index = coords_to_index(x as usize, y as usize, SCREEN_WIDTH as usize);
-        buffer[index].store(color, std::sync::atomic::Ordering::Relaxed);
-
+    for _i in 0..steps as i32 {
+        let xi = x as i32;
+        let yi = y as i32;
+        if xi >= 0 && yi >= 0 && xi < SCREEN_WIDTH as i32 && yi < SCREEN_HEIGHT as i32 {
+            let index = coords_to_index(xi as usize, yi as usize, SCREEN_WIDTH as usize);
+            buffer[index].store(color, std::sync::atomic::Ordering::Relaxed);
+        }
         x += x_inc;
         y += y_inc;
     }

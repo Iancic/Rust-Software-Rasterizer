@@ -44,6 +44,7 @@ use crate::utilities::*;
 use crate::window::*;
 
 fn startup(mut commands: Commands, mut images: ResMut<Assets<Image>>) {
+    
     // Resources (object, texture and z buffer)
     let z_buffer: Vec<AtomicU32> = (0..SCREEN_WIDTH * SCREEN_HEIGHT)
     .map(|_| AtomicU32::new(f32::INFINITY.to_bits()))
@@ -107,8 +108,6 @@ fn startup(mut commands: Commands, mut images: ResMut<Assets<Image>>) {
         scale: GVec3::ONE,
     });
 }
-
-fn update() {}
 
 fn render(
     mut images: ResMut<Assets<Image>>,
@@ -198,7 +197,7 @@ fn render_egui(mut contexts: EguiContexts, mut model: ResMut<ModelTransform>, mu
     }
 }
 
-fn main() {
+fn main() {    // Standrd Bevy builder app with our rasterizer plugin and Eguifor GUI.
     App::new()
         .add_plugins(DefaultPlugins.set(WindowPlugin {
             primary_window: Some(Window {
@@ -210,8 +209,7 @@ fn main() {
         }))
         .add_plugins(EguiPlugin::default())
         .add_systems(Startup, startup)
-        .add_systems(Update, update)
-        .add_systems(Update, render)
+        .add_systems(Update, render) // This is where the software rasterizer runs
         .add_systems(EguiPrimaryContextPass, render_egui)
         .run();
 }
